@@ -1,3 +1,5 @@
+
+```text
 JobScheduler.scala:[作业调度启动]  
   JobScheduler.startUp 启动代码进行zk选主  
     JobScheduler.onElected zk选主成功后进入主循环  
@@ -24,6 +26,6 @@ JobScheduler.scala:[作业调度启动]
         JobScheduler.nanosUntilNextJob 计算下一次等待时间  
           找到不被禁用且不被调度运行的下一个最早的作业，得到等待周期  
           如果作业全被禁用，则默认为1分钟  
-          
+ ```         
         
         
