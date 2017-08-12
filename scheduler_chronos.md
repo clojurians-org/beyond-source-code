@@ -8,7 +8,7 @@ JobScheduler.scala:[作业调度启动]
         进行每一轮等待:  
           如果第一次加载作业，不等待  
           如果有事件通知[比如新增作业], 则不等待  
-          否则等待至下一轮剩余作业的开始时间为止  
+          否则等待至最近一个未调度作业的开始时间为止
           如果没有剩余作业，则默认等待1分钟  
         JobUtils.loadJobs 从存储层获取作业列表  
           默认为MesosStatePersistenceStore, 底层为Zookeeper  
