@@ -55,7 +55,6 @@ JobScheduler.scala:[作业调度启动]
         JobScheduler.runJobs  
           TaskUtils.getTaskId 
             新建作业的任务实例[名称为"ct:%d:%d:%s:%s"], 当前时间微秒, 尝试次数, 作业名称及作业参数
-            并初始化状态为TaskState.TASK_STAGING
           TaskManager.enqueue 将即将运行的任务按优先级加入任务管理器中  
         JobScheduler.nanosUntilNextJob 计算下一次等待时间  
           找到不被禁用且不被调度运行的下一个最早的作业，得到等待周期  
@@ -112,7 +111,7 @@ MesosJobFramework.scala: [任务调度]
       TaskManager.getTaskFromQueue 按优先级从队列中取出taskId
         TaskManager.getTaskHelper
           从JobGraph得到task的job对象
-          如果job被禁用, 发送job事件至Observer[JobExpired]
+          如果job被禁用, JobsObserver.apply 触发JobExpired事件
       如果没有task，返回
       如果task对应的job已经运行@runningTasks，且job不允许并行, 进行下一轮循环
       如果提交请求集合中@tasks中已经存在该task对应的job的提交，进行下一轮循环
@@ -134,22 +133,30 @@ MesosJobFramework.scala: [任务调度]
           从@runningTasks中得到tasks的状态
         调用org.apache.mesos.MesosSchedulerDriver.reconcileTasks更新task状态
   MesosJobFramework.statusUpdate 更新job状态
-    if TaskState.TASK_RUNNING | TaskState.TASK_STAGING
-      TaskManager.updateRunningTask
-      JobScheduler.handleStartedTask
-    else TaskManager.removeTask 
-    if TaskState.TASK_FINISHED
-       TaskState.TASK_FAILED
-       TaskState.TASK_LOST
-       TaskState.TASK_RUNNING
-       TaskState.TASK_KILLED
+    { TaskState.TASK_RUNNING | TaskState.TASK_STAGING -> 
+        TaskManager.updateRunningTask
+          同步状态至runningTasks[job->task]中，如没有，则添加
+        JobScheduler.handleStartedTask
+          JobGraph.lookupVertex查找作业信息
+            JobsObserver.apply [JobStarted]
+            JobGraph.resetDependencyInvocations
+      TaskManager.removeTask 
+    }
+    { TaskState.TASK_FINISHED -> JobSchedule.handleFinishedTask
+        JobMetrics.updateJobStat + JobMetrics.updateJobStat
+        jobsObserver.apply[JobFinished]
+        [jobGraph,persistenceStore]更新job:successCount += 1, errorsSinceLastSuccess=0, lastSuccess=now
+        processDependencies
+        if ScheduleBasedJob, Iso8601Expressions.parse解析后recurrences=0
+          JobsObserver.apply [JobDisabled]
+      TaskState.TASK_FAILED | TaskState.TASK_LOST -> JobSchedule.handleFailedTask
+      TaskState.TASK_KILLED -> JobSchedule.handleKilledTask
+    }
     MesosJobFramework.reconcile 查询mesos任务
       如果现在跟离上一次超过了reconciliationInterval查询间隔[默认600秒]
         TaskManager.getAllTaskStatus 得到作业状态
           从@runningTasks中得到tasks的状态
         调用org.apache.mesos.MesosSchedulerDriver.reconcileTasks更新task状态
-
-    
       
       
 
@@ -166,6 +173,7 @@ JobStats.scala[作业状态存到Cassandra]
       如果作业历史没有running，且当前作业状态为CurrentState.queued则更新作业状态 
       如果作业尝试次数不为0, 则更新作业状态设为"%attemp running"
   JobStats.JobExpired
+  JobStats.JobStarted
 
 
 
