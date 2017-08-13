@@ -55,7 +55,7 @@ JobScheduler.scala:[作业调度启动]
         JobScheduler.runJobs  
           TaskUtils.getTaskId 
             新建作业的任务实例[名称为"ct:%d:%d:%s:%s"], 当前时间微秒, 尝试次数, 作业名称及作业参数
-            并初始化状态为TASK_STAGING
+            并初始化状态为TaskState.TASK_STAGING
           TaskManager.enqueue 将即将运行的任务按优先级加入任务管理器中  
         JobScheduler.nanosUntilNextJob 计算下一次等待时间  
           找到不被禁用且不被调度运行的下一个最早的作业，得到等待周期  
@@ -101,8 +101,10 @@ TaskManager.scala: [任务管理]
     MesosOfferReviverActor.receive
       MesosOfferReviverActor.reviveOffers[conf: SchedulerConfiguration.scala]
         如果上一次距离现在不到minReviveOffersInterval[默认5秒]时间长度, 则等待至下一次资源申请时间点后重发该事件
-        MesosDriverFactory.get得到org.apache.mesos.MesosSchedulerDriver[MesosJobFramework]进行资源申请
-          MesosJobFramework.resourceOffers 得到资源后启动调度框架
+        如果已经发过此事件，则不再发送
+        MesosDriverFactory.get 得到org.apache.mesos.MesosSchedulerDriver
+          org.apache.mesos.MesosSchedulerDriver.reviveOffers[MesosJobFramework]进行资源申请
+            MesosJobFramework.resourceOffers 得到资源后启动调度框架
 
 MesosJobFramework.scala: [任务调度]
   MesosJobFramework.resourceOffers 得到资源后启动调度框架
@@ -112,26 +114,59 @@ MesosJobFramework.scala: [任务调度]
           从JobGraph得到task的job对象
           如果job被禁用, 发送job事件至Observer[JobExpired]
       如果没有task，返回
-      如果task对应的job已经运行，且job不允许并行, 进行下一轮循环
-      如果当前[提交task列表]中已经存在对应job的task调度了，进行下一轮循环
-      如果申请的资源与job.constraints得不到满足，则将作业重新加入TaskManager队列中
-      从申请资源中得到资源，将作业加入[提交Task列表]中
+      如果task对应的job已经运行@runningTasks，且job不允许并行, 进行下一轮循环
+      如果提交请求集合中@tasks中已经存在该task对应的job的提交，进行下一轮循环
+      如果申请的资源与job.constraints得不到满足，则将作业重新加入TaskManager队列中后退出
+      从申请资源中得到资源，将作业加入[提交Task列表]中后进入下一轮循环
     将提交Task列表中未使用的offer资源使用org.apache.mesos.MesosSchedulerDriver.declineOffer掉
-    MesosJobFramework.launchTasks 启动任务
+    MesosJobFramework.launchTasks 启动mesos任务
       org.apache.mesos.MesosSchedulerDriver.launchTasks 启动task
-      TaskManager.addTask 将作业添加止runningTasks[job->tasks]中
+      TaskManager.addTask 将作业添加止@runningTasks[job->tasks]中
       JobScheduler.handleLaunchedTask
         JobScheduler.getNewRunningJob
           如果job是ScheduleBasedJob, 
             JobUtils.skipForward 计算下一次调度日期
         更新job至JobGraph及MesosStatePersistenceStore
       发送通知事件，重新加载运行作业
+    MesosJobFramework.reconcile 查询mesos任务
+      如果现在跟离上一次超过了reconciliationInterval查询间隔[默认600秒]
+        TaskManager.getAllTaskStatus 得到作业状态
+          从@runningTasks中得到tasks的状态
+        调用org.apache.mesos.MesosSchedulerDriver.reconcileTasks更新task状态
+  MesosJobFramework.statusUpdate 更新job状态
+    if TaskState.TASK_RUNNING | TaskState.TASK_STAGING
+      TaskManager.updateRunningTask
+      JobScheduler.handleStartedTask
+    else TaskManager.removeTask 
+    if TaskState.TASK_FINISHED
+       TaskState.TASK_FAILED
+       TaskState.TASK_LOST
+       TaskState.TASK_RUNNING
+       TaskState.TASK_KILLED
+    MesosJobFramework.reconcile 查询mesos任务
+      如果现在跟离上一次超过了reconciliationInterval查询间隔[默认600秒]
+        TaskManager.getAllTaskStatus 得到作业状态
+          从@runningTasks中得到tasks的状态
+        调用org.apache.mesos.MesosSchedulerDriver.reconcileTasks更新task状态
+
+    
       
+      
+
+org.apache.mesos.MesosSchedulerDriver
+  this.reviveOffers 接受资源
+  this.declineOffer 拒绝资源offer
+  this.launchTasks 启动任务
+  this.reconcileTasks 更新作业状态
+
 
 JobStats.scala[作业状态存到Cassandra]
   JobStats.jobQueued [作业id, 任务id, 尝试次数]
     JobStats.updateJobState 更新作业状态, 默认为CurrentState.queued
       如果作业历史没有running，且当前作业状态为CurrentState.queued则更新作业状态 
       如果作业尝试次数不为0, 则更新作业状态设为"%attemp running"
-```
+  JobStats.JobExpired
 
+
+
+```
