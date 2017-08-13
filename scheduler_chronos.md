@@ -1,4 +1,36 @@
 ```text
+Main.scala:[程序入口]
+  modules:
+    ChronosRestModule: HttpModule + MetricsModule[@chaos web framework]
+      Iso8601JobResource
+      DependentJobResource
+      JobManagementResource
+      TaskManagementResource
+      GraphManagementResource
+      StatsResource
+    MainModule:
+     ZookeeperModule[Zookeeper]
+     JobMetricsModule[Graphite]
+     JobStatsModule[Cassandra]
+
+
+MainModule.scala:[组件初始化]
+  provideTaskScheduler -> JobScheduler
+    taskManager: TaskManager
+      provideListeningExecutorService -> java.util.concurrent.ScheduledThreadPoolExecutor
+      provideOfferReviver -> MesosOfferReviverDelegate
+        provideOfferReviverActor -> MesosOfferReviverActor[@actorSystem]
+    jobGraph: JobGraph
+    persistenceStore: ZookeeperModule.provideStore -> MesosStatePersistenceStore[Zookeeper]
+    mesosDriver: provideMesosSchedulerDriverFactory -> MesosDriverFactory
+      MesosJobFramework -> Scheduler
+    jobsObserver: provideJobsObservers -> JobStats + JobNotificationObserver
+      JobStatsModule.provideCassandraClusterBuilder -> Cassandra:com.datastax.driver.core.Cluster
+      provideNotificationClients -> MailClient + RavenClient + SlackClient + MattermostClient + HttpClient
+    jobMetrics: JobMetricsModule.provideMetricReporterService -> MetricReporterService[com.codahale.metrics.graphite.Graphite]
+    actorSystem: akka.actor.ActorSystem
+
+
 JobScheduler.scala:[作业调度启动]  
   JobScheduler.startUp 启动代码进行zk选主  
     JobScheduler.onElected zk选主成功后进入主循环  
@@ -49,10 +81,12 @@ MesosStatePersistenceStore.scala: [作业存储]
 
 JobGraph.scala: [作业注册]
 
+
 Iso8601Expressions.scala: [作业调度解析]
   通过正则表达式"(R[0-9]*)/(.*)/(P.*)"得到重复次数, 开始日期, 调度周期
   如果重次数未设置, 则为-1(不限次数)
   如果开始日期未设置, 则为当前时间-1秒, 使用joda日期库进行解析
+
 
 TaskManager.scala: [任务调度]
   检查队列中是否已经包括了该任务
@@ -63,6 +97,14 @@ TaskManager.scala: [任务调度]
     JobNotificationObserver + JobStats
     JobNotificationObserver
       当作业去除，禁用，失败，成功时发送邮件
+  MesosOfferReviverDelegate.reviveOffers: 请求Mesos资源
+    MesosOfferReviverActor.receive
+      MesosOfferReviverActor.reviveOffers
 
-JobStats.scala
+
+JobStats.scala[作业状态存到Cassandra]
+  JobStats.jobQueued [作业id, 任务id, 尝试次数]
+    JobStats.updateJobState 更新作业状态, 默认为CurrentState.queued
+      如果作业历史没有running，且当前作业状态为CurrentState.queued则更新作业状态 
+      如果作业尝试次数不为0, 则更新作业状态设为"%attemp running"
 ```
