@@ -58,4 +58,60 @@ ZkController.java
   ZkController.preRegister
   ZkController.register
 
+SolrCore.java
+  SolrCore.ctor
+    CoreContainer.SolrCores 增加当前CoreDescriptor
+    initDirectoryFactory
+      HdfsDirectoryFactory.init
+    initRecoveryStrategyBuilder
+    DefaultSolrCoreState[new]
+    initSchema
+    initListeners
+      增加firstSearcher及newSearcher监听器
+    initIndex
+      StandardIndexReaderFactory[new]
+      如果索引目录不存在则新建索引目录
+    initWriters
+    loadSearchComponents 加载SpellCheckComponentHighlightComponent,SuggestComponent 等SearchComponent
+      <searchComponent class="solr.SuggestComponent" name="analyzing_infix_suggester_random_short_dictionary">
+      </searchComponent>
+    loadUpdateProcessorChains 处理更新请求[默认为LogUpdateProcessorFactory, DistributedUpdateProcessorFactory, RunUpdateProcessorFactory]
+      最终由RunUpdateProcessorFactory提交给UpdateHandler[DirectUpdateHandler2]进行实际处理
+        <updateRequestProcessorChain name="uima">... </updateRequestProcessor>
+    RequestHandlers/initHandlersFromConfig 加载RequestHandlers[SearchHandler, ReplicationHandler]
+      <requestHandler name="/select" class="solr.SearchHandler"/>
+      <requestHandler name="/replication" class="solr.ReplicationHandler" startup="lazy" />
+    initStatsCache 初始化统计缓存
+    searcherExecutor 初始化searcherExecutor, 准备填填充线程内容不运行
+    initUpdateHandler 加载UpdateHandler
+      <updateHandler class="solr.DirectUpdateHandler2"> ... </updateHandler>
+    initSearcher
+      getSearcher{forceNew=false, returnSearcher=false, waitSearcher=null, updateHandlerReopens=true}
+        openNewSearcher{updateHandlerReopens=true, realtime=false}
+          DefaultSolrCoreState.getIndexWriter{core=this} 
+            DefaultSolrCoreState.createMainIndexWriter{SolrCore}
+              SolrIndexWriter.create
+                SolrIndexWriter[new]
+          DirectoryReader[new]: StandardIndexReaderFactory.newReader{IndexWriter}
+            org.apache.lucene.index.DirectoryReader.openl{IndexWriter}
+          SolrIndexSearcher[new]{SolrCore, DirectoryReader} 打开IndexSeacher
+    initRestManager
+    seedVersionBuckets
+    bufferUpdatesIfConstructing
+    registerConfListener
+
+SolrIndexWriter.java
+  SolrIndexWriter.ctor 
+    注册metrics
+  
+  
+SolrIndexSearcher.java
+  SolrIndexSearcher.ctor
+    初始化cache
+
+DirectUpdateHandler2.java
+  DirectUpdateHandler2.ctor
+    CommitTracker[new]:Hard
+    CommitTracker[new]:Soft
+
 ```
