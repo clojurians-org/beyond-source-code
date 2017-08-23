@@ -12,6 +12,7 @@ SolrDispatchFilter.java
         CorePropertiesLocator[new]
       CoreContainer.load 开始加载core
         coreContainerWorkExecutor 建立coreLoadExecutor线程池
+        HttpShardHandlerFactory[new]
         UpdateShardHandler[new]
         ZkContainer.initZooKeeper 初始化zookeeper节点
           ZkController/checkChrootPath 检查solr chroot节点是否存在
@@ -36,6 +37,22 @@ SolrDispatchFilter.java
             registerCore[registerInZk=false]
           ZkContainer.registerInZk [background=true, skipRecovery=false] 
             ZkController.register{CoreDescriptor, recoverReloadedCores=false, afterExpiration=false, skipRecovery=false}
+  SolrDispatcherFilter.doFilter
+    HttpSolrCall[new]{CoreContainer}
+    HttpSolrCall.call
+      HttpSolrCall.init
+        CoreContainer.getRequestHandler
+          SolrRequestHandler[new]: RequestHandlerBase.getRequestHandler
+            SearchHandler
+            UpdateRequestHandler@ContentStreamHandlerBase
+            ReplicationHandler
+            CoreAdminHandler
+            ReloadCacheRequestHandler
+      HttpSolrCall.execute
+        SolrCore.execute(SolrRequestHandler)
+          SolrRequestHandler.handleRequest
+            SolrRequestHandler.handleRequestBody
+    
 
 ZkController.java
   ZkController.init
@@ -78,6 +95,19 @@ ZkController.java
           }
         getLeader
         ...
+    getLeader{600000} 使用zk信息, 防止过期
+      getLeaderProps.getCoreUrl
+    ZkController.checkRecovery
+      DefaultSolrCoreState.doRecovery
+        cancelRecovery
+          RecoveryStrategy.close
+            LOG.warn("Stopping recovery for core=[{}] coreNodeName=[{}]", coreName, coreZkNodeName)
+        RecoveryStrategy[+new]
+        <<UpdateExecutor>>.submit{"updateExecutor"} 使用线程池提交RecoveryStrategy任务
+      getLeaderInitiatedRecoveryState
+    public{Replica.State.ACTIVE}
+
+RecoveryStrategy.java
 
 SolrCore.java
   SolrCore.ctor
@@ -113,7 +143,7 @@ SolrCore.java
     initUpdateHandler 加载UpdateHandler
       <updateHandler class="solr.DirectUpdateHandler2"> ... </updateHandler>
       [*] DirectUpdateHandler2[new]
-    initSearcher [使用searcherExecutor阻塞，在SeedVersionBuckets前进行异步调用]
+    initSearcher [使用<<searcherExecutor>>阻塞，在SeedVersionBuckets前进行异步调用]
       getSearcher{forceNew=false, returnSearcher=false, waitSearcher=null, updateHandlerReopens=true}
         openNewSearcher{updateHandlerReopens=true, realtime=false}
           DefaultSolrCoreState.getIndexWriter{core=this} 
@@ -174,4 +204,16 @@ SolrIndexSearcher.java
   SolrIndexSearcher.register
     设置registerTime为当前时间
 
-```
+SearchHandler.java [:debugQuery :debug :distrib :shards.info]
+  SearchHandler.handleRequestBody
+    SearchHandler.getComponents
+      SearchHandler.initComponents
+        ${components}: List<SearchComponent> 
+    SearchHandler.getAndPrepShardHandler
+      {distrib -> HttpShardHandler, else -> nil}
+      ${components}*.prepare
+      {distrib -> 
+       else -> ${components}*.process
+
+UpdateRequestHandler.java
+  UpdateRequestHandler.handleRequestBody
