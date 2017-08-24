@@ -1,4 +1,15 @@
 ```text
+线程关系:
+  <<coreZkRegister>> (ZkContainer.registerInZk => ZkController.register)
+    # ZkController.register -> SolrCore.getUpdateHandler().getUpdateLog().recoverFromLog()
+    <<recoveryExecutor>> (UpdateLog.recoverFromLog => LogReplayer)
+    # ZkController.register -> checkRecovery -> SolrCore.getUpdateHandler().getSolrCoreState().doRecovery
+    <<UpdateExecutor>> (DefaultSolrCoreState.doRecovery -> recoveryExecutor.submit)
+      <<recoveryExecutor>> (DefaultSolrCoreState.doRecovery => RecoveryStrategy)
+        # RecoveryStrategy.run -> RecoveryStrategy.doRecovery -> RecoveryStrategy.doSyncOrReplicateRecovery
+        # -> RecoveryStrategy.replay -> UpdateLog.applyBufferedUpdates
+        <<recoveryExecutor>> (UpdateLog.applyBufferedUpdates -> LogReplayer)
+
 web.xml web启动入口
   <filter>
     <filter-name>SolrRequestFilter</filter-name>
@@ -36,7 +47,8 @@ SolrDispatchFilter.java
             [*] SolrCore[new]
             registerCore[registerInZk=false]
           ZkContainer.registerInZk [background=true, skipRecovery=false] 
-            ZkController.register{CoreDescriptor, recoverReloadedCores=false, afterExpiration=false, skipRecovery=false}
+            <<coreZkRegister>>
+              ZkController.register{CoreDescriptor, recoverReloadedCores=false, afterExpiration=false, skipRecovery=false}
   SolrDispatcherFilter.doFilter
     HttpSolrCall[new]{CoreContainer}
     HttpSolrCall.call
@@ -103,7 +115,8 @@ ZkController.java
           RecoveryStrategy.close
             LOG.warn("Stopping recovery for core=[{}] coreNodeName=[{}]", coreName, coreZkNodeName)
         RecoveryStrategy[+new]
-        <<UpdateExecutor>>.submit{"updateExecutor"} 使用线程池提交RecoveryStrategy任务
+        <<UpdateExecutor>>.submit{"updateExecutor"} 
+          <<RecoveryExecutor>>.submit{"recoveryExecutor""} 使用线程池提交RecoveryStrategy任务
       getLeaderInitiatedRecoveryState
     public{Replica.State.ACTIVE}
 
@@ -211,9 +224,37 @@ SearchHandler.java [:debugQuery :debug :distrib :shards.info]
         ${components}: List<SearchComponent> 
     SearchHandler.getAndPrepShardHandler
       {distrib -> HttpShardHandler, else -> nil}
-      ${components}*.prepare
-      {distrib -> 
-       else -> ${components}*.process
+    ${components}*.prepare
+    {distrib -> 
+      按Stage过程循环
+        ${components}*.distributedProcess  进行分布式处理后得到已完成stage的下一stage
+          QueryComponent.distributedProcess
+        HttpShardHandler.submit 
+            提交给所有shard
+            {去除[shards, indent, echoParams], distrib=false, isShard=true, shard.url, shards.qt=, qt=}
+        等待所有请求
+        如果SHARDS_TOLERANT不为true, 出现异常, 则进行取消操作
+        HttpShardHandler.takeCompletedOrError
+        ${components}*.processResponse
+      ${components}*.finishStage
+     else -> ${components}*.process
+
+QueryComponent.java
+  QueryComponent.distributedProcess
+    QueryComponent.regularDistributedProcess
+      STAGE_PARSE_QUERY -> createDistributedStats 如果包含GET_SCORES标记或者以SCORE排名
+      STAGE_EXECUTE_QUERY -> createMainQuery [distrib.singlePass]
+      STAGE_GET_FIELDS -> createRetrieveDocs 
+      STAGE_DONE
+  QueryComponent.handleResponses
+    QueryComponent.handleRegularResponses
+      PURPOSE_GET_TOP_IDS -> mergeIds
+      PURPOSE_GET_TERM_STATS -> updateStats
+      PURPOSE_GET_FIELDS -> returnFields 
+  QueryComponent.finishStage
 
 UpdateRequestHandler.java
   UpdateRequestHandler.handleRequestBody
+       
+
+```
