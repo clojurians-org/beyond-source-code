@@ -144,10 +144,7 @@ SolrCore.java
       <searchComponent class="solr.SuggestComponent" name="analyzing_infix_suggester_random_short_dictionary">
       </searchComponent>
     loadUpdateProcessorChains 处理更新请求[默认为LogUpdateProcessorFactory, DistributedUpdateProcessorFactory, RunUpdateProcessorFactory]
-      LogUpdateProcessorFactory -> RunUpdateProcessorFactory$LogUpdateProcessor, 
-      DistributedUpdateProcessorFactory -> DistributedUpdateProcessor
-      RunUpdateProcessorFactory -> RunUpdateProcessorFactory$RunUpdateProcessorFactory
-      最终由RunUpdateProcessorFactory$RunUpdateProcessorFactory分布式提交给各个UpdateHandler[DirectUpdateHandler2]进行实际处理
+      最终由RunUpdateProcessorFactory$RunUpdateProcessor分布式提交给各个UpdateHandler[DirectUpdateHandler2]进行实际处理
         <updateRequestProcessorChain name="uima">... </updateRequestProcessor>
     RequestHandlers/initHandlersFromConfig 加载RequestHandlers[SearchHandler, ReplicationHandler]
       <requestHandler name="/select" class="solr.SearchHandler"/>
@@ -254,7 +251,37 @@ QueryComponent.java
   QueryComponent.finishStage
 
 UpdateRequestHandler.java
-  UpdateRequestHandler.handleRequestBody
-       
+  ContentStreamHandlerBase.handleRequestBody
+    UpdateRequestProcessorChain.createProcessor
+      {LogUpdateProcessorFactory -> LogUpdateProcessorFactory$LogUpdateProcessor,
+       DistributedUpdateProcessorFactory -> DistributedUpdateProcessor
+       RunUpdateProcessorFactory -> RunUpdateProcessorFactory$RunUpdateProcessor} 
+    UpdateRequestHandler.ContentStreamLoader[new]
+    UpdateRequestHandler.ContentStreamLoader.load
+      JavabinLoader.load{RunUpdateProcessorFactory$RunUpdateProcessor}
+        JavabinLoader.parseAndLoadDocs
+          JavaBinUpdateRequestCodec$StreamingUpdateHandler[new]
+          JavaBinUpdateRequestCodec.unmarshal{JavaBinUpdateRequestCodec$StreamingUpdateHandler}
+            JavaBinUpdateRequestCodec$JavaBinCodec.unmarshal -> ${docMap}
+              JavaBinCodec.readVal
+              JavaBinUpdateRequestCodec$JavaBinCodec.readOuterMostDocIterator
+                JavaBinUpdateRequestCodec$StreamingUpdateHandler.update
+                  AddUpdateCommand{:overwrite ~> true, :commitWithin ~> -1} 
+                  RunUpdateProcessorFactory$RunUpdateProcessor.processAdd
+            updateRequest.deleteById 如果delById
+            updateRequest.deleteByIdMap 如果delByIdMap
+            updateRequest.delByQ 如果delByQ
+          JavabinLoader.delete
+            RunUpdateProcessorFactory$RunUpdateProcessor.processDelete
+    RunUpdateProcessorFactory$RunUpdateProcessor.processCommit 如果[:optimize :commit :softCommit :prepareCommit]
+      [:openSearcher :waitSearcher :softCommit :expungeDeletes :maxSegments :prepareCommit]
+    RunUpdateProcessorFactory$RunUpdateProcessor.processRollback 如果[:rollback]
 
+RunUpdateProcessorFactory$RunUpdateProcessor.java
+  RunUpdateProcessorFactory$RunUpdateProcessor.update
+    DistributedUpdateProcessor.processAdd
+      DistributedUpdateProcessor.versionAdd
+        UpdateLog.add
+          TransactionLog.write
+        DistributedUpdateProcessor.doLocalAdd
 ```
