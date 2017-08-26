@@ -280,8 +280,53 @@ UpdateRequestHandler.java
 RunUpdateProcessorFactory$RunUpdateProcessor.java
   RunUpdateProcessorFactory$RunUpdateProcessor.update
     DistributedUpdateProcessor.processAdd
+      setupRequest
+        如果是REPLAY或者PEER_SYNC {:isLeader->false, :forwardToLeader-false} 不需要leader逻辑, 返回
+        DocCollection.getRouter.getTargetSlice 通过路由找到目标Shard所有主机, 没有则抛出异常
+        update.distrib 为DistribPhase.FROMLEADER且自己不为leader，则可能有问题, 继续往下处理
+          否则不需要leader逻辑{:isLeader=false, :forwardToLeader=false}
+        如果distrib.from及distrib.from.parent不为空, 且slice不为active, 则报错
+        如果父slice 不包含子slice, 则报错
+        如果fromLeader, 由distrib.from.collection路由而来, 但自己为leaer, 则报错
+        {fromLeader -> [:forwardToLeader=false]
+         isLeader -> 加入replica到${nodes}
+         else -> [:forwardToLeader=true], 加入leader到${nodes}
+        }
       DistributedUpdateProcessor.versionAdd
-        UpdateLog.add
-          TransactionLog.write
+        AddUpdateCommand.getIndexedId
+        确保UniqueKeyField字段有且仅有一个
+        确保UpdateLog读取的${vinfo} 存在
+        getUpdatedDocument
+          RealTimeGetComponent.getInputDocument
+            getInputDocumentFromTlog
+              UpdateLog.lookup
+            SolrDocumentFetcher.doc
+          AtomicUpdateDocumentMerger.merge
+        UpdateLog.add | 如果UpdateLog不是Active状态
         DistributedUpdateProcessor.doLocalAdd
+      SolrCmdDistributor.distribAdd 如果${nodes}不为空, {:distrib.from=}
+        SolrCmdDistributor.submit 遍历${nodes}提交
+          <<updateExecutor>> -> doRequest
+            ErrorReportingConcurrentUpdateSolrClient.request@StreamingSolrClients
+
+HdfsUpdateLog.java
+  HdfsUpdateLog.ctor
+    org.apache.hadoop.hdfs.DistributedFileSystem/append
+     Iorg.apache.hadoop.hdfs.DFSClient.append
+        org.apache.hadoop.hdfs.DFSOutputStream[new]
+          org.apache.hadoop.hdfs.DFSOutputStream$DataStreamer.run
+            org.apache.hadoop.hdfs.DFSOutputStream$DataStreamer.processDatanodeError
+              org.apache.hadoop.hdfs.DFSOutputStream$DataStreamer.setupPipelineForAppendOrRecovery
+        org.apache.hadoop.hdfs.FSDataOutputStream[new] {org.apache.hadoop.hdfs.DFSOutputStream} 
+    ${fos}: FastOutputStream[new] {org.apache.hadoop.fs.FSDataOutputStream{org.apache.hadoop.hdfs.DFSOutputStream}}
+  UpdateLog.add
+    如果不是UpdateCommand.REPLAY
+      HdfsTransactionLog[new] 如果不存在则新建
+      TransactionLog.write
+        checkWriteHeader
+        FastOutputStream.write
+          flush | 如果buf满了, 否则存在buf
+            org.apache.hadoop.fs.FSDataOutputStream.write
+              org.apache.hadoop.hdfs.DFSOutputStream.write
+
 ```
