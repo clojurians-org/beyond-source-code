@@ -180,30 +180,6 @@ SolrCore.java
         versionInfo.blockUpdates
     registerConfListener
 
-DirectUpdateHandler2.java
-  DirectUpdateHandler2.ctor
-    DirectUpdateHandler2.super{SolrCore}
-      UpdateHandler.{SolrCore,UpdateLog=null}
-        HdfsUpdateLog[new]
-        HdfsUpdateLog.init{PluginInfo}
-        HdfsUpdateLog.init{UpdateHandler, SolrCore}
-          如果不存在tlog目录，则创建
-          getLogList 得到所有的日志文件并加入logs列表中[最老在前面]
-          从logs取出最早的两个日志加入newestLogsOnStartup中
-          VersionInfo[new]{HdfsUpdateLog}
-            IndexSchema.readSchema
-            getAndCheckVersionField 验证version字段
-          getRecentUpdates  如果存在,则加入tlog, prevTlog到LogList[最新在前面]
-            UpdateLog.RecentUpdates[new]
-              UpdateLog.update
-                HdfsTransactionLog.getReverseReader
-                  HDFSReverseReader[new]
-                读取LogList里面的UpdateLog操作至updateList以及version至updates[version:update]
-            添加操作记录至oldDeletes及deleteByQueries
-    CommitTracker[new]:Hard
-    CommitTracker[new]:Soft
-
-
 SolrIndexWriter.java
   SolrIndexWriter.ctor 
     注册metrics
@@ -304,6 +280,9 @@ RunUpdateProcessorFactory$RunUpdateProcessor.java
           AtomicUpdateDocumentMerger.merge
         UpdateLog.add | 如果UpdateLog不是Active状态
         DistributedUpdateProcessor.doLocalAdd
+          UpdateRequestProcessor.processAdd
+            RunUpdateProcessorFactory$RunUpdateProcessor.processAdd
+              DirectUpdateHandler2.addDoc
       SolrCmdDistributor.distribAdd 如果${nodes}不为空, {:distrib.from=}
         SolrCmdDistributor.submit 遍历${nodes}提交
           <<updateExecutor>> -> doRequest
@@ -311,14 +290,9 @@ RunUpdateProcessorFactory$RunUpdateProcessor.java
 
 HdfsUpdateLog.java
   HdfsUpdateLog.ctor
-    org.apache.hadoop.hdfs.DistributedFileSystem/append
-     Iorg.apache.hadoop.hdfs.DFSClient.append
-        org.apache.hadoop.hdfs.DFSOutputStream[new]
-          org.apache.hadoop.hdfs.DFSOutputStream$DataStreamer.run
-            org.apache.hadoop.hdfs.DFSOutputStream$DataStreamer.processDatanodeError
-              org.apache.hadoop.hdfs.DFSOutputStream$DataStreamer.setupPipelineForAppendOrRecovery
-        org.apache.hadoop.hdfs.FSDataOutputStream[new] {org.apache.hadoop.hdfs.DFSOutputStream} 
-    ${fos}: FastOutputStream[new] {org.apache.hadoop.fs.FSDataOutputStream{org.apache.hadoop.hdfs.DFSOutputStream}}
+    HdfsTransactionLog
+      org.apache.hadoop.hdfs.DistributedFileSystem.append
+      ${fos}: FastOutputStream[new] {org.apache.hadoop.hdfs.client.HdfsDataOutputStream}
   UpdateLog.add
     如果不是UpdateCommand.REPLAY
       HdfsTransactionLog[new] 如果不存在则新建
@@ -326,7 +300,54 @@ HdfsUpdateLog.java
         checkWriteHeader
         FastOutputStream.write
           flush | 如果buf满了, 否则存在buf
-            org.apache.hadoop.fs.FSDataOutputStream.write
-              org.apache.hadoop.hdfs.DFSOutputStream.write
+            org.apache.hadoop.hdfs.client.HdfsDataOutputStream.write
+
+DirectUpdateHandler2.java
+  DirectUpdateHandler2.ctor
+    DirectUpdateHandler2.super{SolrCore}
+      UpdateHandler.{SolrCore,UpdateLog=null}
+        HdfsUpdateLog[new]
+        HdfsUpdateLog.init{PluginInfo}
+        HdfsUpdateLog.init{UpdateHandler, SolrCore}
+          如果不存在tlog目录，则创建
+          getLogList 得到所有的日志文件并加入logs列表中[最老在前面]
+          从logs取出最早的两个日志加入newestLogsOnStartup中
+          VersionInfo[new]{HdfsUpdateLog}
+            IndexSchema.readSchema
+            getAndCheckVersionField 验证version字段
+          getRecentUpdates  如果存在,则加入tlog, prevTlog到LogList[最新在前面]
+            UpdateLog.RecentUpdates[new]
+              UpdateLog.update
+                HdfsTransactionLog.getReverseReader
+                  HDFSReverseReader[new]
+                读取LogList里面的UpdateLog操作至updateList以及version至updates[version:update]
+            添加操作记录至oldDeletes及deleteByQueries
+    CommitTracker[new]:Hard
+    CommitTracker[new]:Soft
+  DirectUpdateHandler2.addDoc
+    DirectUpdateHandler2.addDoc0
+      DirectUpdateHandler2.doNormalUpdate
+        ${updateTerm} <- idTerm | 如果updateTerm为空
+        DirectUpdateHandler2.updateDocOrDocValues{IndexWriter}
+          DirectUpdateHandler2.updateDocument
+            {block -> writer.updateDocuments{${updateTerm}, AddUpdateCommand@Iterable<Document>}
+             else -> writer.updateDocument{${updateTerm}, Document} 
+          UpdateLog.add 操作成功后, 写入tlog
+
+
+IndexWriter.java
+  IndexWriter.updateDocuments{AddUpdateCommand}
+    AddUpdateCommand.iterator
+      AddUpdateCommand.flatten
+        AddUpdateCommand.recUnwrapp 递归增加所有子文档
+    DocumentsWriter.updateDocuments
+      DocumentsWriterPerThread.updateDocuments
+        DocConsumer.processDocument 循环处理
+        DocumentsWriterDeleteQueue.add
+  IndexWriter.updateDocument
+    DocumentsWriter.updateDocument
+      DocumentsWriterPerThread.updateDocument
+        DocConsumer.processDocument
+        DocumentsWriterDeleteQueue.add
 
 ```
