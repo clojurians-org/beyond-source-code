@@ -342,12 +342,46 @@ IndexWriter.java
         AddUpdateCommand.recUnwrapp 递归增加所有子文档
     DocumentsWriter.updateDocuments
       DocumentsWriterPerThread.updateDocuments
-        DocConsumer.processDocument 循环处理
+        DefaultIndexingChain.processDocument 循环处理
         DocumentsWriterDeleteQueue.add
   IndexWriter.updateDocument
     DocumentsWriter.updateDocument
       DocumentsWriterPerThread.updateDocument
-        DocConsumer.processDocument
+        DefaultIndexingChain.processDocument
         DocumentsWriterDeleteQueue.add
+
+
+DefaultIndexingChain.java
+  DefaultIndexingChain.ctor
+    [FreqProxTermsWriter -> TermVectorsConsumer, StoredFieldsConsumer]
+  DefaultIndexingChain.processDocument
+    FreqProxTermsWriter.startDocument 
+      TermVectorsConsumer.startDocument 重置字段
+    DefaultIndexingChain.startStoredFields
+      StoredFieldsConsumer.startDocument{docID}
+        DocumentsWriterPerThread.codec.storedFieldsFormat().fieldsWriter
+          Lucene70Codec -> Lucene50StoredFieldsFormat ->  CompressingStoredFieldsFormat -> CompressingStoredFieldsWriter[new]
+          CompressingStoredFieldsWriter.startDocument
+    DefaultIndexingChain.processField 循环处理字段生成PerField信息
+      如果索引选项不为NONE
+        DefaultIndexingChain.getOrAddField
+          1. ${fieldHash}[hashcode]通过hash值得到PerField
+          2. ${fieldInfos}.getOrAdd
+          3. PerField[new]
+        PerField.invert
+          IndexableField.tokenStream 得到TokenStream
+            > FreqProxTermsWriter.addField -> FreqProxTermsWriterPerField[new]{TermsHashPerField}
+            FreqProxTermsWriterPerField.start
+              TermsHashPerField.start
+              循环field.tokenStream
+                TermsHashPerField.add
+        加入${fields}, 如果字段第一次出现
+      如果字段类型为STORED
+        StoredFieldsConsumer.writeField
+          CompressingStoredFieldsWriter.write
+
+    DefaultIndexingChain.finishStoredFields
+    FreqProxTermsWriter.finishDocument
+      Lucene70Codec -> Lucene50TermVectorsFormat ->  CompressingTermVectorsFormat -> CompressingTermVectorsWriter[new]
 
 ```
