@@ -346,10 +346,38 @@ IndexWriter.java
         DocumentsWriterDeleteQueue.add
   IndexWriter.updateDocument
     DocumentsWriter.updateDocument
-      DocumentsWriterPerThread.updateDocument
-        DefaultIndexingChain.processDocument
-        DocumentsWriterDeleteQueue.add
 
+DocumentsWriter.java
+  DocumentsWriter.updateDocument
+    <<DocumentsWriterPerThreadPool>>:DocumentsWriterPerThread.updateDocument
+      DefaultIndexingChain.processDocument
+      DocumentsWriterPerThread.finishDocument
+        DocumentsWriterDeleteQueue.add
+          增加到当前slice链表中
+          DocumentsWriterDeleteQueue.tryApplyGlobalSlice 添加到${globalSlice}
+    DocumentsWriterFlushControl.doAfterDocument{DocumentsWriterPerThread, isUpdate=true}
+      DocumentsWriterFlushControl.commitPerThreadBytes 更新ThreadState消耗字节信息
+      ThreadState不为flushPending状态
+        FlushByRamOrCountsPolicy.onUpdate
+          =FlushPolicy.onUpdate
+            FlushByRamOrCountsPolicy.onInsert
+            FlushByRamOrCountsPolicy.onDelete
+              {如果maxBufferedDocs达到了-> 
+                DocumentsWriterFlushControl.setFlushPending{ThreadState}
+                  设置ThreadState.flushPending
+              如果ramBufferSizeMB达到了->
+                FlushByRamOrCountsPolicy.markLargestWriterPending
+                  findLargestNonPendingWriter 找到最大的非PendingWriter
+                  DocumentsWriterFlushControl.setFlushPending
+                    设置其ThreadState.flushPending
+              如果单个线程超过2G, 设置ThreadState.flushPending}
+      DocumentsWriterFlushControl.tryCheckoutForFlush
+        internalTryCheckOutForFlush
+          ${flushingWriters}.put{DocumentsWriterPerThread, bytes} 记录字节数
+    DocumentsWriter.postUpdate
+      DocumentsWriter.applyAllDeletes
+      DocumentsWriter.doFlush{DocumentsWriterPerThread}
+        
 
 DefaultIndexingChain.java
   DefaultIndexingChain.ctor
@@ -392,7 +420,6 @@ DirectoryReader.java
           =BaseCompositeReader{SegmentReader[]} 
             ${subReaders} <- SegmentReader[]
             ${starts} <- 每个segment里面的maxDoc数累积和
-            
 
 IndexSearcher.java
   IndexSearcher.doc
