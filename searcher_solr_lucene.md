@@ -236,12 +236,12 @@ UpdateRequestHandler.java
     UpdateRequestHandler.ContentStreamLoader.load
       JavabinLoader.load{RunUpdateProcessorFactory$RunUpdateProcessor}
         JavabinLoader.parseAndLoadDocs
-          JavaBinUpdateRequestCodec$StreamingUpdateHandler[new]
+          ~JavaBinUpdateRequestCodec$StreamingUpdateHandler[new]
           JavaBinUpdateRequestCodec.unmarshal{JavaBinUpdateRequestCodec$StreamingUpdateHandler}
             JavaBinUpdateRequestCodec$JavaBinCodec.unmarshal -> ${docMap}
               JavaBinCodec.readVal
               JavaBinUpdateRequestCodec$JavaBinCodec.readOuterMostDocIterator
-                JavaBinUpdateRequestCodec$StreamingUpdateHandler.update
+                ~JavaBinUpdateRequestCodec$StreamingUpdateHandler.update
                   AddUpdateCommand{:overwrite ~> true, :commitWithin ~> -1} 
                   RunUpdateProcessorFactory$RunUpdateProcessor.processAdd
             updateRequest.deleteById 如果delById
@@ -255,23 +255,26 @@ UpdateRequestHandler.java
 
 RunUpdateProcessorFactory$RunUpdateProcessor.java
   RunUpdateProcessorFactory$RunUpdateProcessor.update
-    DistributedUpdateProcessor.processAdd
-      setupRequest
-        如果是REPLAY或者PEER_SYNC {:isLeader->false, :forwardToLeader-false} 不需要leader逻辑, 返回
-        DocCollection.getRouter.getTargetSlice 通过路由找到目标Shard所有主机, 没有则抛出异常
-        update.distrib 为DistribPhase.FROMLEADER且自己不为leader，则可能有问题, 继续往下处理
-          否则不需要leader逻辑{:isLeader=false, :forwardToLeader=false}
-        如果distrib.from及distrib.from.parent不为空, 且slice不为active, 则报错
-        如果父slice 不包含子slice, 则报错
-        如果fromLeader, 由distrib.from.collection路由而来, 但自己为leaer, 则报错
-        {fromLeader -> [:forwardToLeader=false]
-         isLeader -> 加入replica到${nodes}
-         else -> [:forwardToLeader=true], 加入leader到${nodes}
-        }
-      DistributedUpdateProcessor.versionAdd
-        AddUpdateCommand.getIndexedId
-        确保UniqueKeyField字段有且仅有一个
-        确保UpdateLog读取的${vinfo} 存在
+
+DistributedUpdateProcessor.java
+  DistributedUpdateProcessor.processAdd
+    setupRequest
+      如果是REPLAY或者PEER_SYNC {:isLeader->false, :forwardToLeader-false} 不需要leader逻辑, 返回
+      DocCollection.getRouter.getTargetSlice 通过路由找到目标Shard所有主机, 没有则抛出异常
+      update.distrib 为DistribPhase.FROMLEADER且自己不为leader，则可能有问题, 继续往下处理
+        否则不需要leader逻辑{:isLeader=false, :forwardToLeader=false}
+      如果distrib.from及distrib.from.parent不为空, 且slice不为active, 则报错
+      如果父slice 不包含子slice, 则报错
+      如果fromLeader, 由distrib.from.collection路由而来, 但自己为leaer, 则报错
+      {fromLeader -> [:forwardToLeader=false]
+       isLeader -> 加入replica到${nodes}
+       else -> [:forwardToLeader=true], 加入leader到${nodes}
+      }
+    DistributedUpdateProcessor.versionAdd
+      AddUpdateCommand.getIndexedId
+      确保UniqueKeyField字段有且仅有一个
+      确保UpdateLog读取的${vinfo} 存在
+      如果是原子更新
         getUpdatedDocument
           RealTimeGetComponent.getInputDocument
             getInputDocumentFromTlog
@@ -279,14 +282,14 @@ RunUpdateProcessorFactory$RunUpdateProcessor.java
             SolrDocumentFetcher.doc
           AtomicUpdateDocumentMerger.merge
         UpdateLog.add | 如果UpdateLog不是Active状态
-        DistributedUpdateProcessor.doLocalAdd
-          UpdateRequestProcessor.processAdd
-            RunUpdateProcessorFactory$RunUpdateProcessor.processAdd
-              DirectUpdateHandler2.addDoc
-      SolrCmdDistributor.distribAdd 如果${nodes}不为空, {:distrib.from=}
-        SolrCmdDistributor.submit 遍历${nodes}提交
-          <<updateExecutor>> -> doRequest
-            ErrorReportingConcurrentUpdateSolrClient.request@StreamingSolrClients
+      DistributedUpdateProcessor.doLocalAdd
+        UpdateRequestProcessor.processAdd
+          RunUpdateProcessorFactory$RunUpdateProcessor.processAdd
+            DirectUpdateHandler2.addDoc
+    SolrCmdDistributor.distribAdd 如果${nodes}不为空, {:distrib.from=}
+      SolrCmdDistributor.submit 遍历${nodes}提交
+        <<updateExecutor>> -> doRequest
+          ErrorReportingConcurrentUpdateSolrClient.request@StreamingSolrClients
 
 HdfsUpdateLog.java
   HdfsUpdateLog.ctor
@@ -346,6 +349,27 @@ IndexWriter.java
         DocumentsWriterDeleteQueue.add
   IndexWriter.updateDocument
     DocumentsWriter.updateDocument
+  IndexWriter.deleteDocuments
+    DocumentsWriter.deleteTerms
+  IndexWriter.commit
+    IndexWriter.commitInternal
+      IndexWriter.prepareCommitInternal
+        DocumentsWriter.flushAllThreads
+          DocumentsWriterFlushControl.markForFullFlush
+            ${fullFlush} <- true
+            deleteQueue <- new DocumentsWriterDeleteQueue{generation++, seqNo}
+              ; seqNo <- ${deleteQueue}.getLastSequenceNumber + 2 * perThreadPool.getActiveThreadStateCount + 2
+            对于每个threadState
+              perThread.flushPending <- true
+              internalTryCheckOutForFlush
+                增加至${flushingWriters}
+        IndexWriter.processEvents{:triggerMerge=false, :forcePurge=false}
+        IndexWriter.applyAllDeletesAndUpdates
+        DocumentsWriter.finishFullFlush
+        ${maybeMerge} <- true
+        IndexWriter.startCommit
+      IndexWriter.maybeMerge
+      IndexWriter.finishCommit
 
 DocumentsWriter.java
   DocumentsWriter.updateDocument
@@ -362,7 +386,6 @@ DocumentsWriter.java
           =FlushPolicy.onUpdate
             FlushByRamOrCountsPolicy.onInsert
             FlushByRamOrCountsPolicy.onDelete
-              {如果maxBufferedDocs达到了-> 
                 DocumentsWriterFlushControl.setFlushPending{ThreadState}
                   设置ThreadState.flushPending
               如果ramBufferSizeMB达到了->
@@ -377,7 +400,48 @@ DocumentsWriter.java
     DocumentsWriter.postUpdate
       DocumentsWriter.applyAllDeletes
       DocumentsWriter.doFlush{DocumentsWriterPerThread}
-        
+        DocumentsWriterPerThread.flush()
+          DocumentsWriterPerThread.codec.liveDocsFormat()
+            ~Lucene50LiveDocsFormat.newLiveDocs{numDocsInRAM} 创建
+              FixedBitSet[new]
+          DefaultIndexingChain.flush 写入常规文件
+          sealFlushedSegment
+            如果getUseCompoundFile 合并常规文件为.cfs, .cfe文件
+              DocumentsWriterPerThread.codec.compoundFormat().write [.cfs, .cfe]
+                ~Lucene50CompoundFormat.write
+            DocumentsWriterPerThread.codec.segmentInfoFormat().write [*.si]
+              ~Lucene70SegmentInfoFormat.write 写入.si文件
+            如果存在删除doc
+              DocumentsWriterPerThread.codec.liveDocsFormat
+                ~Lucene50LiveDocsFormat.writeLiveDocs
+            SegmentCommitInfo.advanceDelGen
+  DocumentsWriter.deleteTerms 
+    DocumentsWriterDeleteQueue.addDelete
+      DocumentsWriterDeleteQueue.tryApplyGlobalSlice
+        加入${globalBufferedUpdates}
+    DocumentsWriterFlushControl.doOnDelete
+      FlushByRamOrCountsPolicy.onDelete{state <- nil}
+        DocumentsWriterFlushControl.setApplyAllDeletes
+    DocumentsWriterFlushControl.getAndResetApplyAllDeletes |
+      ticketQueue.addDeletes{DocumentsWriterDeleteQueue}
+      ${events}增加ApplyDeletesEvent.INSTANCE
+  DocumentsWriter.commit
+    DocumentsWriterFlushControl.markForFullFlush
+      ${fullFlush} <- true
+      deleteQueue <- new DocumentsWriterDeleteQueue{generation++, seqNo}
+        ; seqNo <- ${deleteQueue}.getLastSequenceNumber + 2 * perThreadPool.getActiveThreadStateCount + 2
+      对于每个threadState
+        perThread.flushPending <- true
+        internalTryCheckOutForFlush
+          增加至${flushingWriters}
+    对于每个PendingFlush
+      doFlush
+        DocumentsWriterFlushQueue.addFlushTicket 增加至${ticketQueue}
+          [new]SegmentFlushTicket{frozenDeletes:FrozenBufferedUpdates <- DocumentsWriterPerThread.prepareFlush}
+
+          增加至${DocumentsWriterFlushQueue.queue}
+        DocumentsWriterPerThread.flush
+    DocumentsWriterFlushControl.waitForFlush
 
 DefaultIndexingChain.java
   DefaultIndexingChain.ctor
@@ -402,7 +466,7 @@ DefaultIndexingChain.java
             FreqProxTermsWriterPerField.start
               TermsHashPerField.start
               循环field.tokenStream
-                TermsHashPerField.add
+                FreqProxTermsWriterPerField.add
         加入${fields}, 如果字段第一次出现
       如果字段类型为STORED
         StoredFieldsConsumer.writeField
@@ -414,12 +478,21 @@ DefaultIndexingChain.java
 
 DirectoryReader.java
   DirectoryReader.open
-    StandardDirectoryReader.open
-      StandardDirectoryReader[new]
-        =DirectoryReader.ctor{Directory, SegmentReader[]}
-          =BaseCompositeReader{SegmentReader[]} 
-            ${subReaders} <- SegmentReader[]
-            ${starts} <- 每个segment里面的maxDoc数累积和
+    StandardDirectoryReader.open{IndexCommit=null}
+      SegmentInfos.FindSegmentsFile[new]
+      SegmentInfos.FindSegmentsFile.run
+        SegmentInfos.getLastCommitGeneration
+          generationFromSegmentsFileName
+        #SegmentInfos.doBody
+          SegmentInfos.readCommit
+            codec.segmentInfoFormat().read
+              ~Lucene70SegmentInfoFormat.read
+          ${readers}: SegmentReader[new]
+          StandardDirectoryReader[new]
+            =DirectoryReader.ctor{Directory, SegmentReader[]}
+              =BaseCompositeReader{SegmentReader[]} 
+                ${subReaders} <- SegmentReader[]
+                ${starts} <- 每个segment里面的maxDoc数累积和
 
 IndexSearcher.java
   IndexSearcher.doc
@@ -427,6 +500,7 @@ IndexSearcher.java
       =BaseCompositeReader.document
         readerIndex{docId} 通过${starts}二分查找得到SegmentReader
         SegmentReader.document
+          CompressingStoredFieldsReader.visitDocument{docId}
         
 
 ```
