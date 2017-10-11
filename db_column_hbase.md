@@ -8,6 +8,24 @@ hbase.sh
   regionserver [start|stop]
     org.apache.hadoop.hbase.regionserver.HRegionServer
 
+HRegionServer.java
+  HRegionServer.ctor
+    createRpcServices
+      RSRpcServices[new]
+    CompactedHFilesDischarger[new]
+
+RSRpcServices.java
+  RSRpcServices.ctor
+    RpcServerFactory.createRpcServer
+      #getServices()
+  RSRpcServices.getRegion
+    HRegionServer.getRegionByEncodedName
+      ${onlineRegions}.get
+  RSRpcServices.get
+    RSRpcServices.getRegion
+    RegionCoprocessorHost.preExists
+      RegionCoprocessorHost.execOperationWithResult
+
 HMaster.java
   HMaster.main
     HMasterCommandLine.doMain
@@ -26,12 +44,31 @@ HMaster.java
               HMaster.join
                 =Runnable@HasThread@HRegionServer.join
   HMaster.ctor
+    =HRegionServer.ctor
+      HRegionServer.createRpcServices
+        =MasterRpcServices.createRpcServices
+          MasterRpcServices[new]
+            =RSRpcServices.ctor
+              MasterRpcServices.getServices()
+                MasterService
+                RegionServerStatusService
+                RSRpcServices.ClientService
+                RSRpcServices.AdminService
+              RpcServerFactory.createRpcServer 
+                SimpleRpcServer[new]
+                  =RpcServer[new]
+      MasterRpcServices.start
+        SimpleRpcServer.start
+          authTokenSecretMgr.start
+          responder.start
+          listener.start
+          scheduler.start
     ActiveMasterManager[new]
     putUpJettyServer
     startActiveMasterManager
   HMaster.run
     =HRegionServer.run
-    
+
 
 ;--------
 ; CLIENT
@@ -49,3 +86,4 @@ ConnectionImplementation.java
 HBaseAdmin.java
   createTable{HTableDescriptor, region}
     
+```
